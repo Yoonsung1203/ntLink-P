@@ -114,6 +114,7 @@ class ContigRun:
 
 class NtLink():
     "Represents an ntLink graph construction run"
+    contig_mx_positions = {}
 
     @staticmethod
     def get_largest_ntlink_scaffold_id(scaffolds):
@@ -378,7 +379,7 @@ class NtLink():
                     length_long_read = int(line[1])
                     accepted_anchor_contigs, contig_runs = \
                         ntlink_utils.get_accepted_anchor_contigs(mx_pos_split,length_long_read,
-                                                                 NtLink.scaffolds, NtLink.list_mx_info, self.args)
+                                                                 NtLink.scaffolds, NtLink.list_mx_info, self.args, NtLink.contig_mx_positions)
                     if self.args.verbose and accepted_anchor_contigs:
                         for ctg_run in accepted_anchor_contigs:
                             verbose_file.write("{}\t{}\t{}\t{}\n".
@@ -524,7 +525,8 @@ class NtLink():
         parser.add_argument("-x", help="Fudge factor allowed between mapping block lengths on read and assembly. "
                                        "Set to 0 to allow mapping block to be up to read length",
                             type=float, default=0)
-        parser.add_argument("--hc", help="Minimum number of hit counts", required=False, type = int, default = 2)
+        parser.add_argument("--hc", help="Minimum number of hit counts [2]", required=False, type = int, default = 2)
+        parser.add_argument("--mx_ratio", help="Min fraction of a contig's unique minimizers in the anchored interval that the read must hit [0=disabled]", required=False, type = float, default = 0)
         parser.add_argument("-c", "--checkpoint", help="Mappings checkpoint file", required=False)
         parser.add_argument("--pairs", help="Output pairs TSV file", action="store_true")
         parser.add_argument("--paf", help="Output mappings in PAF-like format", action="store_true")
@@ -550,6 +552,7 @@ class NtLink():
         print("\t-f ", self.args.f)
         print("\t-x ", self.args.x)
         print("\t--hc ", self.args.hc)
+        print("\t--mx_ratio ", self.args.mx_ratio)
         if self.args.checkpoint:
             print("\t-c ", self.args.checkpoint)
         if self.args.sensitive:
@@ -579,6 +582,15 @@ class NtLink():
                 # Read in the minimizers for target assembly
                 mxs_info = self.read_minimizers()
                 NtLink.list_mx_info = mxs_info
+
+                from collections import defaultdict
+                idx = defaultdict(list)
+                for mx, info in NtLink.list_mx_info.items():
+                    idx[info.contig].append(info.position)
+                for ctg in idx:
+                    idx[ctg].sort()
+                    print(len(idx[ctg]))
+                NtLink.contig_mx_positions = dict(idx)
 
             # Load target scaffolds into memory
             scaffolds = ntlink_utils.read_fasta_file(self.args.s)  # scaffold_id -> Scaffold
