@@ -1,0 +1,3 @@
+#!/bin/bash
+ntlink_path=$(dirname "$0")/ntLink
+make -f $ntlink_path "$@"

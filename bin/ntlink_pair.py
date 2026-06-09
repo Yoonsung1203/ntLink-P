@@ -327,8 +327,8 @@ class NtLink():
         if pair not in pairs:
             pairs[pair] = PairInfo()
         pairs[pair].add_gap_estimate(gap_est)
-        if accepted_anchor_contigs[ctg_i].hit_count > 1 and \
-                        accepted_anchor_contigs[ctg_j].hit_count > 1:
+        if accepted_anchor_contigs[ctg_i].hit_count >= self.args.hc and \
+                        accepted_anchor_contigs[ctg_j].hit_count >= self.args.hc:
             pairs[pair].anchor += 1
 
         return pair
@@ -429,7 +429,7 @@ class NtLink():
 
             # Add transitive edges over weakly supported contigs
             contig_runs_filter = [ctg for ctg in contig_runs
-                                  if accepted_anchor_contigs[ctg].hit_count > 1]
+                                  if accepted_anchor_contigs[ctg].hit_count >= self.args.hc]
             for ctg_i, ctg_j in zip(contig_runs_filter, contig_runs_filter[1:]):
                 self.add_pair(accepted_anchor_contigs, ctg_i, ctg_j, pairs, length_long_read,
                               check_added=added_pairs)
@@ -524,6 +524,7 @@ class NtLink():
         parser.add_argument("-x", help="Fudge factor allowed between mapping block lengths on read and assembly. "
                                        "Set to 0 to allow mapping block to be up to read length",
                             type=float, default=0)
+        parser.add_argument("--hc", help="Minimum number of hit counts", required=False, type = int, default = 2)
         parser.add_argument("-c", "--checkpoint", help="Mappings checkpoint file", required=False)
         parser.add_argument("--pairs", help="Output pairs TSV file", action="store_true")
         parser.add_argument("--paf", help="Output mappings in PAF-like format", action="store_true")
@@ -548,6 +549,7 @@ class NtLink():
         print("\t-z ", self.args.z)
         print("\t-f ", self.args.f)
         print("\t-x ", self.args.x)
+        print("\t--hc ", self.args.hc)
         if self.args.checkpoint:
             print("\t-c ", self.args.checkpoint)
         if self.args.sensitive:
