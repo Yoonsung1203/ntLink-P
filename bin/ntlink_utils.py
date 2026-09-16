@@ -4,6 +4,7 @@ General utility functions for ntLink
 
 __author__ = "Lauren Coombe @lcoombe"
 
+import bisect
 import datetime
 from collections import namedtuple, defaultdict
 import os
@@ -197,7 +198,8 @@ def find_valid_mx_region(scaf_noori, scaf_ori, scaffolds, overlap, args, source=
     return start, end
 
 
-def get_accepted_anchor_contigs(mx_list, read_length, scaffolds, list_mx_info, args):
+def get_accepted_anchor_contigs(mx_list, read_length, scaffolds, list_mx_info, args,
+                                contig_mx_positions=None):
     "Returns dictionary of contigs of appropriate length, mx hits, whether subsumed"
     contig_list = [] # list of (contig, mx_positions)
     contig_positions = {}  # contig -> [mx_positions]
@@ -231,6 +233,21 @@ def get_accepted_anchor_contigs(mx_list, read_length, scaffolds, list_mx_info, a
                             (args.x * abs(end_positions.read_pos - start_positions.read_pos)) + args.k)
             if abs(end_positions.ctg_pos - start_positions.ctg_pos) > threshold:
                 noisy_contigs.add(contig)
+
+        # Minimizer hit-ratio filter: fraction of the contig's unique minimizers
+        # within the anchored interval that this read actually hit.
+        # Active only in direct (round 1) mode, where the index is complete.
+        mx_ratio = getattr(args, "mx_ratio", 0)
+        if mx_ratio > 0 and not getattr(args, "checkpoint", None) and contig_mx_positions:
+            all_positions = contig_mx_positions.get(contig, [])
+            if all_positions:
+                low = min(start_positions.ctg_pos, end_positions.ctg_pos)
+                high = max(start_positions.ctg_pos, end_positions.ctg_pos)
+                denominator = bisect.bisect_right(all_positions, high) - \
+                    bisect.bisect_left(all_positions, low)
+                numerator = len({position.ctg_pos for position in positions})
+                if denominator > 0 and (numerator / denominator) < mx_ratio:
+                    noisy_contigs.add(contig)
     contig_list = [contig_tup for contig_tup in contig_list if contig_tup.contig not in noisy_contigs]
 
     contig_runs = [ntlink_pair.ContigRun(ctg, [hit.mx_positions for hit in hits])

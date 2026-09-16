@@ -18,6 +18,7 @@ import numpy as np
 import igraph as ig
 import ntlink_utils
 import ntlink_paf_output
+import ntlink_kmer_mask
 
 MinimizerEdge = namedtuple("MinimizerEdge", ["mx_i", "mx_i_pos", "mx_i_strand",
                                              "mx_j", "mx_j_pos", "mx_j_strand"])
@@ -115,6 +116,11 @@ class ContigRun:
 class NtLink():
     "Represents an ntLink graph construction run"
 
+    # contig -> sorted list of unique-minimizer positions on that contig.
+    # Built once in direct (round 1) mode only; left empty in checkpoint mode
+    # so that the mx-ratio filter is automatically inactive there.
+    contig_mx_positions = {}
+
     @staticmethod
     def get_largest_ntlink_scaffold_id(scaffolds):
         "Detect if any headers adhere to ntLink_{num} convention, and if so return the largest number"
@@ -207,6 +213,26 @@ class NtLink():
                             mx_info[mx] = Minimizer(ctg_name, int(pos), strand)
 
         mx_info = {mx: mx_info[mx] for mx in mx_info if mx not in dup_mxs}
+
+        # Coordinate-based masking from read-derived k-mer copy number / depth.
+        # Applied after assembly-uniqueness dedup so the two filters compose:
+        # a minimizer must be unique in the assembly AND pass the read-based mask.
+        mx_info = ntlink_kmer_mask.filter_mx_info_by_regions(
+            mx_info,
+            exclude_bed=getattr(self.args, "mx_exclude_bed", None),
+            include_bed=getattr(self.args, "mx_include_bed", None))
+
+        # k-mer identity masking. Read-derived copy number names individual
+        # k-mers, so this removes exactly those and leaves unique k-mers that
+        # happen to sit inside a flagged interval intact.
+        exclude_kmers = ntlink_kmer_mask.load_kmer_set(
+            getattr(self.args, "mx_exclude_kmers", None), self.args.k)
+        include_kmers = ntlink_kmer_mask.load_kmer_set(
+            getattr(self.args, "mx_include_kmers", None), self.args.k)
+        if exclude_kmers or include_kmers:
+            mx_info = ntlink_kmer_mask.filter_mx_info_by_kmers(
+                mx_info, self.args.s, self.args.k,
+                exclude_kmers=exclude_kmers, include_kmers=include_kmers)
 
         return mx_info
 
@@ -327,8 +353,8 @@ class NtLink():
         if pair not in pairs:
             pairs[pair] = PairInfo()
         pairs[pair].add_gap_estimate(gap_est)
-        if accepted_anchor_contigs[ctg_i].hit_count > 1 and \
-                        accepted_anchor_contigs[ctg_j].hit_count > 1:
+        if accepted_anchor_contigs[ctg_i].hit_count >= self.args.hc and \
+                        accepted_anchor_contigs[ctg_j].hit_count >= self.args.hc:
             pairs[pair].anchor += 1
 
         return pair
@@ -378,7 +404,8 @@ class NtLink():
                     length_long_read = int(line[1])
                     accepted_anchor_contigs, contig_runs = \
                         ntlink_utils.get_accepted_anchor_contigs(mx_pos_split,length_long_read,
-                                                                 NtLink.scaffolds, NtLink.list_mx_info, self.args)
+                                                                 NtLink.scaffolds, NtLink.list_mx_info, self.args,
+                                                                 NtLink.contig_mx_positions)
                     if self.args.verbose and accepted_anchor_contigs:
                         for ctg_run in accepted_anchor_contigs:
                             verbose_file.write("{}\t{}\t{}\t{}\n".
@@ -429,7 +456,7 @@ class NtLink():
 
             # Add transitive edges over weakly supported contigs
             contig_runs_filter = [ctg for ctg in contig_runs
-                                  if accepted_anchor_contigs[ctg].hit_count > 1]
+                                  if accepted_anchor_contigs[ctg].hit_count >= self.args.hc]
             for ctg_i, ctg_j in zip(contig_runs_filter, contig_runs_filter[1:]):
                 self.add_pair(accepted_anchor_contigs, ctg_i, ctg_j, pairs, length_long_read,
                               check_added=added_pairs)
@@ -524,6 +551,31 @@ class NtLink():
         parser.add_argument("-x", help="Fudge factor allowed between mapping block lengths on read and assembly. "
                                        "Set to 0 to allow mapping block to be up to read length",
                             type=float, default=0)
+        parser.add_argument("--hc", help="Minimum minimizer hits on a contig for a read to count as "
+                                        "well-anchored to it [2, matches stock ntLink]",
+                            required=False, type=int, default=2)
+        parser.add_argument("--mx-ratio", dest="mx_ratio",
+                            help="Minimum fraction of a contig's unique minimizers within the anchored "
+                                 "interval that a read must hit. Round 1 (direct mapping) only. "
+                                 "[0 = disabled]",
+                            required=False, type=float, default=0)
+        parser.add_argument("--mx-exclude-bed", dest="mx_exclude_bed",
+                            help="BED file of target regions whose minimizers are excluded as anchors "
+                                 "(e.g. collapsed repeats from read k-mer copy number or depth)",
+                            required=False, default=None)
+        parser.add_argument("--mx-include-bed", dest="mx_include_bed",
+                            help="BED file of target regions; only minimizers inside these regions are "
+                                 "kept as anchors (whitelist)",
+                            required=False, default=None)
+        parser.add_argument("--mx-exclude-kmers", dest="mx_exclude_kmers",
+                            help="File of canonical k-mers (sequences from `meryl print`, or "
+                                 "packed integers) to exclude as anchors. Filters by k-mer "
+                                 "identity, not by interval, so individually unique k-mers "
+                                 "inside a flagged region survive",
+                            required=False, default=None)
+        parser.add_argument("--mx-include-kmers", dest="mx_include_kmers",
+                            help="File of canonical k-mers; only these are kept as anchors",
+                            required=False, default=None)
         parser.add_argument("-c", "--checkpoint", help="Mappings checkpoint file", required=False)
         parser.add_argument("--pairs", help="Output pairs TSV file", action="store_true")
         parser.add_argument("--paf", help="Output mappings in PAF-like format", action="store_true")
@@ -577,6 +629,17 @@ class NtLink():
                 # Read in the minimizers for target assembly
                 mxs_info = self.read_minimizers()
                 NtLink.list_mx_info = mxs_info
+
+                # Build per-contig sorted minimizer position index for the
+                # mx-ratio filter. Direct mode only: in checkpoint mode
+                # list_mx_info is sparse, so the denominator would be wrong.
+                if self.args.mx_ratio > 0:
+                    position_index = defaultdict(list)
+                    for minimizer_info in mxs_info.values():
+                        position_index[minimizer_info.contig].append(minimizer_info.position)
+                    for contig in position_index:
+                        position_index[contig].sort()
+                    NtLink.contig_mx_positions = dict(position_index)
 
             # Load target scaffolds into memory
             scaffolds = ntlink_utils.read_fasta_file(self.args.s)  # scaffold_id -> Scaffold

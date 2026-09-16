@@ -1,0 +1,6 @@
+scenario	edge	truth	A none	B BED	C kmer	D strict	E strict+comp	F BED-WL	G kmer-WL
+S1 clean	ctg1a-ctg1b	true	join	join	join	join	join	join	join
+S2 starved	ctg2a-ctg2b	true	join	join	join	MISS	join	join	join
+S3 telomere	ctg3-ctg4	FALSE	join(bad)	blocked	blocked	blocked	blocked	blocked	blocked
+S4 collapsed	ctg5-ctg6	FALSE	join(bad)	blocked	blocked	blocked	blocked	blocked	blocked
+S5 whitelist	ctg7a-ctg7b	true	join	join	join	join	join	dropped	dropped
