@@ -56,6 +56,20 @@ overlap=True
 # Fudge factor for filtering by mapping block length
 x=0
 
+# Minimum minimizer hits on a contig for a read to be well-anchored to it
+hc=2
+
+# Minimum fraction of a contig's unique minimizers in the anchored interval
+# that a read must hit (round 1 only; 0 disables)
+mx_ratio=0
+
+# BED of target regions whose minimizers are excluded as anchors
+# (e.g. collapsed repeats from read k-mer copy number / depth)
+mx_exclude_bed=
+
+# BED of target regions to restrict anchors to (whitelist)
+mx_include_bed=
+
 # Run ntLink in conservative mode?
 conservative=True
 
@@ -142,6 +156,10 @@ help:
 	@echo "paf			If True, outputs read to contig mappings in PAF-like format [False]"
 	@echo "overlap			If True, runs extra step to attempt to identify and trim overlapping joined sequences [True]"
 	@echo "sensitive	        If True, runs mapping in sensitive mode [False]"
+	@echo "hc			Min minimizer hits on a contig for a read to be well-anchored [2]"
+	@echo "mx_ratio		Min fraction of a contig's unique minimizers in anchored interval hit by read; round 1 only [0=off]"
+	@echo "mx_exclude_bed		BED of target regions whose minimizers are excluded as anchors []"
+	@echo "mx_include_bed		BED of target regions to restrict anchors to []"
 	@echo "soft_mask		If True, gaps are filled with lowercase bases [False]"
 	@echo ""
 	@echo "Note: "
@@ -217,12 +235,18 @@ endif
 ifeq ($(paf), True)
 ntlink_pair_params+=--paf
 endif
+ifneq ($(mx_exclude_bed),)
+ntlink_pair_params+=--mx-exclude-bed $(mx_exclude_bed)
+endif
+ifneq ($(mx_include_bed),)
+ntlink_pair_params+=--mx-include-bed $(mx_include_bed)
+endif
 
 $(prefix).n$(n).scaffold.dot: $(target).k$(k).w$(w).tsv $(reads)
 	$(ntLink_time)  sh -c '$(gzip) -cd $(reads) | \
 	indexlr --long --pos --strand --len -k $(k) -w $(w) -t $(t) - | \
 	$(ntlink_path)/ntlink_pair.py -p $(prefix) -n $(n) -m $< -s $(target)  \
-	-k $(k) -a $(a) -z $(z) -f $(f) -x $(x) $(ntlink_pair_params) -'
+	-k $(k) -a $(a) -z $(z) -f $(f) -x $(x) --hc $(hc) --mx-ratio $(mx_ratio) $(ntlink_pair_params) -'
 
 # Run abyss-scaffold scaffolding layout
 $(prefix).n%.abyss-scaffold.path: $(prefix).n$(n).scaffold.dot
